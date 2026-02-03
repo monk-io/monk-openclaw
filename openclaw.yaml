@@ -1,0 +1,486 @@
+namespace: openclaw
+
+openclaw-common:
+  metadata:
+    defines: metadata
+    name: OpenClaw
+    description: OpenClaw (MoltBot, ClawdBot) - AI assistant gateway for messaging platforms
+    website: https://docs.openclaw.ai
+    publisher: openclaw
+    icon: https://openclaw.ai/logo.png
+
+  variables:
+    # Docker image configuration
+    openclaw-image:
+      type: string
+      value: alpine/openclaw:2026.2.1
+
+    # Volume path for persistent storage
+    volume-local:
+      type: string
+      value: <- `${monk-volume-path}/openclaw`
+
+gateway:
+  inherits: ./openclaw-common
+  defines: runnable
+
+  containers:
+    main:
+      image: <- `${openclaw-image}`
+      ports:
+        - <- `0.0.0.0:${gateway-port}:18789`
+        - <- `0.0.0.0:${bridge-port}:18790`
+      paths:
+        - <- `${volume-local}/config:/home/node/.openclaw`
+        - <- `${volume-local}/workspace:/home/node/.openclaw/workspace`
+      environment:
+        - HOME=/home/node
+        - TERM=xterm-256color
+        - <- `OPENCLAW_GATEWAY_TOKEN=${openclaw-gateway-token}`
+        - <- `CLAUDE_AI_SESSION_KEY=${claude-ai-session-key}`
+        - <- `CLAUDE_WEB_SESSION_KEY=${claude-web-session-key}`
+        - <- `CLAUDE_WEB_COOKIE=${claude-web-cookie}`
+      bash: >-
+        node dist/index.js gateway
+        --bind ${OPENCLAW_GATEWAY_BIND:-lan}
+        --port 18789
+
+  services:
+    http:
+      container: main
+      port: 18789
+      protocol: tcp
+      ingress-routes:
+        gateway:
+          path-prefix: /
+    bridge:
+      container: main
+      port: 18790
+      protocol: tcp
+
+  checks:
+    readiness:
+      code: http-get-service("openclaw/gateway", "http", "/health") get-member("status") 200 eq?
+      period: 10
+      initialDelay: 15
+    liveness:
+      code: http-get-service("openclaw/gateway", "http", "/health") get-member("status") 200 eq?
+      period: 30
+      initialDelay: 30
+
+  variables:
+    # Gateway ports
+    gateway-port:
+      type: int
+      value: 18789
+    bridge-port:
+      type: int
+      value: 18790
+
+    # Gateway binding (lan, loopback, public)
+    gateway-bind:
+      env: OPENCLAW_GATEWAY_BIND
+      type: string
+      value: lan
+
+    # Required: API token for gateway access
+    openclaw-gateway-token:
+      type: string
+      value: <- secret("openclaw-gateway-token")
+
+    # Optional: Claude session keys for AI provider (leave empty if not using Claude web)
+    claude-ai-session-key:
+      type: string
+      value: ""
+    claude-web-session-key:
+      type: string
+      value: ""
+    claude-web-cookie:
+      type: string
+      value: ""
+
+  permitted-secrets:
+    openclaw-gateway-token: true
+
+cli:
+  inherits: ./openclaw-common
+  defines: runnable
+
+  containers:
+    main:
+      image: <- `${openclaw-image}`
+      paths:
+        - <- `${volume-local}/config:/home/node/.openclaw`
+        - <- `${volume-local}/workspace:/home/node/.openclaw/workspace`
+      environment:
+        - HOME=/home/node
+        - TERM=xterm-256color
+        - BROWSER=echo
+        - <- `OPENCLAW_GATEWAY_TOKEN=${openclaw-gateway-token}`
+        - <- `CLAUDE_AI_SESSION_KEY=${claude-ai-session-key}`
+        - <- `CLAUDE_WEB_SESSION_KEY=${claude-web-session-key}`
+        - <- `CLAUDE_WEB_COOKIE=${claude-web-cookie}`
+
+  variables:
+    # Required: API token for gateway access
+    openclaw-gateway-token:
+      type: string
+      value: <- secret("openclaw-gateway-token")
+
+    # Optional: Claude session keys for AI provider (leave empty if not using Claude web)
+    claude-ai-session-key:
+      type: string
+      value: ""
+    claude-web-session-key:
+      type: string
+      value: ""
+    claude-web-cookie:
+      type: string
+      value: ""
+
+  permitted-secrets:
+    openclaw-gateway-token: true
+
+  actions:
+    defines: actions
+    onboard:
+      code: exec("main", "node", "dist/index.js", "onboard", "--no-install-daemon")
+      description: Run onboarding wizard (non-interactive daemon install)
+    channels-login:
+      code: exec("main", "node", "dist/index.js", "channels", "login")
+      description: Login to WhatsApp via QR code
+    channels-status:
+      code: exec("main", "node", "dist/index.js", "channels", "status")
+      description: Show channels status
+    health:
+      code: exec("main", "node", "dist/index.js", "health", "--token", "${openclaw-gateway-token}")
+      description: Check gateway health
+
+stack:
+  defines: process-group
+  runnable-list:
+    - openclaw/gateway
+
+  variables:
+    # Gateway port mappings
+    gateway-port:
+      type: int
+      value: 18789
+    bridge-port:
+      type: int
+      value: 18790
+
+    # Gateway binding mode (lan, loopback, public)
+    gateway-bind:
+      type: string
+      value: lan
+
+    # Docker image (use alpine/openclaw from Docker Hub)
+    openclaw-image:
+      type: string
+      value: alpine/openclaw:2026.2.1
+
+# =============================================================================
+# Ollama Integration
+# =============================================================================
+
+# Gateway with Ollama support - configures OpenClaw to connect to Ollama container
+gateway-ollama:
+  inherits: ./gateway
+  defines: runnable
+
+  variables:
+    # Ollama host (resolved from ollama container in the same group)
+    ollama-host:
+      type: string
+      value: <- get-hostname("openclaw/ollama", "ollama") split(".dns.podman") join("")
+
+    # Ollama API key (any value works, Ollama doesn't require a real key)
+    ollama-api-key:
+      type: string
+      value: ollama-local
+
+  containers:
+    main:
+      image: <- `${openclaw-image}`
+      ports:
+        - <- `0.0.0.0:${gateway-port}:18789`
+        - <- `0.0.0.0:${bridge-port}:18790`
+      paths:
+        - <- `${volume-local}/config:/home/node/.openclaw`
+        - <- `${volume-local}/workspace:/home/node/.openclaw/workspace`
+      environment:
+        - HOME=/home/node
+        - TERM=xterm-256color
+        - <- `OPENCLAW_GATEWAY_TOKEN=${openclaw-gateway-token}`
+        - <- `CLAUDE_AI_SESSION_KEY=${claude-ai-session-key}`
+        - <- `CLAUDE_WEB_SESSION_KEY=${claude-web-session-key}`
+        - <- `CLAUDE_WEB_COOKIE=${claude-web-cookie}`
+        # Ollama API key enables the provider (value doesn't matter for local Ollama)
+        - <- `OLLAMA_API_KEY=${ollama-api-key}`
+        # Point to injected config file (outside volume mount path)
+        - OPENCLAW_CONFIG_PATH=/etc/openclaw/openclaw.json
+      bash: >-
+        node dist/index.js gateway
+        --bind ${OPENCLAW_GATEWAY_BIND:-lan}
+        --port 18789
+
+  # Inject OpenClaw config to /etc/openclaw (outside the volume mount)
+  files:
+    ollama-config:
+      container: main
+      path: /etc/openclaw/openclaw.json
+      mode: 0644
+      contents: |
+        {
+          "gateway": {
+            "mode": "local",
+            "auth": {
+              "token": "{{ v "openclaw-gateway-token" }}"
+            },
+            "controlUi": {
+              "enabled": true,
+              "dangerouslyDisableDeviceAuth": true
+            }
+          },
+          "models": {
+            "providers": {
+              "ollama": {
+                "apiKey": "{{ v "ollama-api-key" }}",
+                "baseUrl": "http://{{ v "ollama-host" }}:11434/v1",
+                "api": "openai-completions",
+                "models": [
+                  { "id": "llama3.3", "name": "Llama 3.3" },
+                  { "id": "llama3.2:1b", "name": "Llama 3.2 1B" },
+                  { "id": "qwen2.5:0.5b", "name": "Qwen 2.5 0.5B" },
+                  { "id": "qwen2.5-coder:32b", "name": "Qwen 2.5 Coder 32B" }
+                ]
+              }
+            }
+          },
+          "agents": {
+            "defaults": {
+              "model": {
+                "primary": "ollama/qwen2.5:0.5b"
+              }
+            }
+          }
+        }
+
+  depends:
+    wait-for:
+      runnables:
+        - openclaw/ollama
+      timeout: 120
+
+# Ollama CPU instance (inherits from ollama/ollama)
+ollama:
+  inherits: ollama/ollama
+  defines: runnable
+
+  variables:
+    volume-local:
+      type: string
+      value: <- `${monk-volume-path}/ollama`
+
+  containers:
+    ollama:
+      paths:
+        - <- `${volume-local}:/root/.ollama`
+
+  actions:
+    defines: actions
+    pull-model:
+      arguments:
+        model:
+          type: string
+          description: Model name to pull (e.g. llama3.3, qwen2.5-coder:32b)
+      code: exec("ollama", "ollama", "pull", $args["model"])
+      description: Pull a model from Ollama registry
+    list-models:
+      code: exec("ollama", "ollama", "list")
+      description: List installed models
+
+# Ollama GPU instance (inherits from ollama/ollama-gpu)
+ollama-gpu:
+  inherits: ollama/ollama-gpu
+  defines: runnable
+
+  variables:
+    volume-local:
+      type: string
+      value: <- `${monk-volume-path}/ollama`
+
+  containers:
+    ollama:
+      paths:
+        - <- `${volume-local}:/root/.ollama`
+
+  actions:
+    defines: actions
+    pull-model:
+      arguments:
+        model:
+          type: string
+          description: Model name to pull (e.g. llama3.3, qwen2.5-coder:32b)
+      code: exec("ollama", "ollama", "pull", $args["model"])
+      description: Pull a model from Ollama registry
+    list-models:
+      code: exec("ollama", "ollama", "list")
+      description: List installed models
+
+# Gateway with Ollama GPU support
+gateway-ollama-gpu:
+  inherits: ./gateway
+  defines: runnable
+
+  variables:
+    # Ollama host (resolved from ollama-gpu container)
+    ollama-host:
+      type: string
+      value: <- get-hostname("openclaw/ollama-gpu", "ollama") split(".dns.podman") join("")
+
+    # Ollama API key (any value works, Ollama doesn't require a real key)
+    ollama-api-key:
+      type: string
+      value: ollama-local
+
+  containers:
+    main:
+      image: <- `${openclaw-image}`
+      ports:
+        - <- `0.0.0.0:${gateway-port}:18789`
+        - <- `0.0.0.0:${bridge-port}:18790`
+      paths:
+        - <- `${volume-local}/config:/home/node/.openclaw`
+        - <- `${volume-local}/workspace:/home/node/.openclaw/workspace`
+      environment:
+        - HOME=/home/node
+        - TERM=xterm-256color
+        - <- `OPENCLAW_GATEWAY_TOKEN=${openclaw-gateway-token}`
+        - <- `CLAUDE_AI_SESSION_KEY=${claude-ai-session-key}`
+        - <- `CLAUDE_WEB_SESSION_KEY=${claude-web-session-key}`
+        - <- `CLAUDE_WEB_COOKIE=${claude-web-cookie}`
+        # Ollama API key enables the provider (value doesn't matter for local Ollama)
+        - <- `OLLAMA_API_KEY=${ollama-api-key}`
+        # Point to injected config file (outside volume mount path)
+        - OPENCLAW_CONFIG_PATH=/etc/openclaw/openclaw.json
+      bash: >-
+        node dist/index.js gateway
+        --bind ${OPENCLAW_GATEWAY_BIND:-lan}
+        --port 18789
+
+  # Inject OpenClaw config to /etc/openclaw (outside the volume mount)
+  files:
+    ollama-config:
+      container: main
+      path: /etc/openclaw/openclaw.json
+      mode: 0644
+      contents: |
+        {
+          "gateway": {
+            "mode": "local",
+            "auth": {
+              "token": "{{ v "openclaw-gateway-token" }}"
+            },
+            "controlUi": {
+              "enabled": true,
+              "dangerouslyDisableDeviceAuth": true
+            }
+          },
+          "models": {
+            "providers": {
+              "ollama": {
+                "apiKey": "{{ v "ollama-api-key" }}",
+                "baseUrl": "http://{{ v "ollama-host" }}:11434/v1",
+                "api": "openai-completions",
+                "models": [
+                  { "id": "llama3.3", "name": "Llama 3.3" },
+                  { "id": "llama3.2:1b", "name": "Llama 3.2 1B" },
+                  { "id": "qwen2.5:0.5b", "name": "Qwen 2.5 0.5B" },
+                  { "id": "qwen2.5-coder:32b", "name": "Qwen 2.5 Coder 32B" }
+                ]
+              }
+            }
+          },
+          "agents": {
+            "defaults": {
+              "model": {
+                "primary": "ollama/llama3.3"
+              }
+            }
+          }
+        }
+
+  depends:
+    wait-for:
+      runnables:
+        - openclaw/ollama-gpu
+      timeout: 120
+
+# =============================================================================
+# Stack with Ollama (CPU)
+# =============================================================================
+stack-ollama:
+  defines: process-group
+  runnable-list:
+    - openclaw/ollama
+    - openclaw/gateway-ollama
+
+  variables:
+    # Gateway port mappings
+    gateway-port:
+      type: int
+      value: 18789
+    bridge-port:
+      type: int
+      value: 18790
+
+    # Gateway binding mode
+    gateway-bind:
+      type: string
+      value: lan
+
+    # Docker image
+    openclaw-image:
+      type: string
+      value: alpine/openclaw:2026.2.1
+
+    # Default Ollama model to use
+    ollama-default-model:
+      type: string
+      value: qwen2.5:0.5b
+
+# =============================================================================
+# Stack with Ollama GPU
+# =============================================================================
+stack-ollama-gpu:
+  defines: process-group
+  runnable-list:
+    - openclaw/ollama-gpu
+    - openclaw/gateway-ollama-gpu
+
+  variables:
+    # Gateway port mappings
+    gateway-port:
+      type: int
+      value: 18789
+    bridge-port:
+      type: int
+      value: 18790
+
+    # Gateway binding mode
+    gateway-bind:
+      type: string
+      value: lan
+
+    # Docker image
+    openclaw-image:
+      type: string
+      value: alpine/openclaw:2026.2.1
+
+    # Default Ollama model to use
+    ollama-default-model:
+      type: string
+      value: llama3.3
+

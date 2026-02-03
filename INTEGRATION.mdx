@@ -1,0 +1,302 @@
+---
+title: OpenClaw
+description: Ready-to-run OpenClaw AI assistant gateway template you can run directly or inherit to integrate AI capabilities into your messaging platforms.
+primary_category: ai-ml
+tags: [openclaw, ai, assistant, gateway, chatbot, whatsapp, telegram, discord, slack, llm, template, runnable]
+integration_type: template
+hosting_models: [self-hosted]
+website_url: https://docs.openclaw.ai
+docs_url: https://docs.openclaw.ai/install/docker
+publisher: openclaw
+---
+
+## Overview
+
+This template provides a production-ready OpenClaw AI assistant gateway as a Monk runnable. You can:
+
+- Run it directly to get a managed AI gateway for messaging platforms
+- Inherit it in your own applications to add AI assistant capabilities
+- Combine with Ollama for local LLM inference
+
+OpenClaw is an AI assistant gateway that connects to messaging platforms (WhatsApp, Telegram, Discord, Slack, Signal) and provides AI-powered responses using various LLM providers.
+
+## What this template manages
+
+- OpenClaw gateway container (`alpine/openclaw` image)
+- HTTP API service on port 18789
+- Bridge service on port 18790
+- Configuration and workspace persistence
+- Health checks (readiness and liveness)
+- Optional Ollama integration for local LLMs
+
+## Quick start (run directly)
+
+1) Load templates
+
+```bash
+monk load MANIFEST
+```
+
+2) Add required secrets
+
+```bash
+monk secrets add -g openclaw-gateway-token="$(openssl rand -hex 32)"
+```
+
+3) Run OpenClaw gateway
+
+```bash
+monk run openclaw/gateway
+```
+
+Once started, the gateway is available at `localhost:18789`.
+
+## With Ollama integration
+
+For local LLM inference without external API dependencies:
+
+1) Load both templates
+
+```bash
+monk load MANIFEST
+```
+
+2) Add secrets
+
+```bash
+monk secrets add -g openclaw-gateway-token="$(openssl rand -hex 32)"
+```
+
+3) Run the combined stack
+
+```bash
+# CPU version
+monk run openclaw/stack-ollama
+
+# GPU version (requires NVIDIA GPU)
+monk run openclaw/stack-ollama-gpu
+```
+
+4) Pull a model
+
+```bash
+# Fast model for CPU
+monk do openclaw/ollama/pull-model model=qwen2.5:0.5b
+
+# Or larger model for GPU
+monk do openclaw/ollama/pull-model model=llama3.3
+```
+
+## Configuration
+
+Key variables you can customize:
+
+```yaml
+variables:
+  openclaw-image: "alpine/openclaw:2026.2.1"  # container image
+  gateway-port: 18789                          # HTTP API port
+  bridge-port: 18790                           # bridge port
+  gateway-bind: "lan"                          # bind mode (lan, loopback, public)
+```
+
+Required secrets:
+
+```bash
+# Gateway authentication token (required)
+monk secrets add -g openclaw-gateway-token="$(openssl rand -hex 32)"
+
+# Optional: Claude session keys
+monk secrets add -g claude-ai-session-key="your-key"
+```
+
+## Changing the Default Model
+
+The template comes with a pre-configured default model (`qwen2.5:0.5b` for CPU, `llama3.3` for GPU). If you want to use a different Ollama model, you need to:
+
+1. **Pull the new model:**
+
+```bash
+monk do openclaw/ollama/pull-model model=your-model-name
+```
+
+2. **Update the gateway configuration** by modifying `openclaw.yaml`:
+
+Find the `gateway-ollama` section and update the models list and primary model:
+
+```yaml
+# In the files.ollama-config.contents JSON:
+"models": [
+  { "id": "your-model-name", "name": "Your Model Name" },
+  # ... other models
+]
+
+# And update the default:
+"agents": {
+  "defaults": {
+    "model": {
+      "primary": "ollama/your-model-name"
+    }
+  }
+}
+```
+
+3. **Reload and restart:**
+
+```bash
+monk load MANIFEST
+monk stop openclaw/stack-ollama
+monk run openclaw/stack-ollama
+```
+
+### Example: Using Mistral
+
+```bash
+# Pull the model
+monk do openclaw/ollama/pull-model model=mistral
+
+# Edit openclaw.yaml to add mistral to models list and set as primary:
+# "models": [{ "id": "mistral", "name": "Mistral 7B" }, ...]
+# "primary": "ollama/mistral"
+
+# Reload
+monk load MANIFEST
+monk stop openclaw/stack-ollama
+monk run openclaw/stack-ollama
+```
+
+> **Note:** The model ID in the configuration must exactly match the model name in Ollama (as shown by `monk do openclaw/ollama/list-models`).
+
+## Use by inheritance
+
+Inherit the OpenClaw runnable in your application:
+
+```yaml
+namespace: myapp
+
+ai-gateway:
+  defines: runnable
+  inherits: openclaw/gateway
+  variables:
+    gateway-port:
+      value: 8080
+
+backend:
+  defines: runnable
+  containers:
+    api:
+      image: myorg/backend
+  connections:
+    openclaw:
+      runnable: ai-gateway
+      service: http
+  variables:
+    openclaw-host:
+      value: <- connection-hostname("openclaw")
+    openclaw-port:
+      value: "18789"
+```
+
+Then run your application:
+
+```bash
+monk run myapp/backend
+```
+
+## Ports and connectivity
+
+- Service `http`: TCP port 18789 (Gateway API)
+- Service `bridge`: TCP port 18790 (Bridge connections)
+- Health endpoint: `GET /health`
+
+From other runnables, use `connection-hostname("<connection-name>")` to resolve the OpenClaw host.
+
+## Persistence
+
+- Configuration: `${monk-volume-path}/openclaw/config:/home/node/.openclaw`
+- Workspace: `${monk-volume-path}/openclaw/workspace:/home/node/.openclaw/workspace`
+- Ollama models: `${monk-volume-path}/ollama:/root/.ollama`
+
+## Features
+
+- Multi-platform messaging support (WhatsApp, Telegram, Discord, Slack, Signal)
+- Multiple LLM provider support (OpenAI, Anthropic, Ollama, and more)
+- Local LLM inference with Ollama integration
+- Persistent configuration and workspaces
+- Health monitoring with readiness/liveness checks
+- CLI tools for channel management
+
+## Available Actions
+
+| Action | Description | Command |
+|--------|-------------|---------|
+| `onboard` | Run onboarding wizard | `monk do openclaw/cli/onboard` |
+| `channels-login` | Login to WhatsApp | `monk do openclaw/cli/channels-login` |
+| `channels-status` | Check channels status | `monk do openclaw/cli/channels-status` |
+| `health` | Gateway health check | `monk do openclaw/cli/health` |
+| `pull-model` | Pull Ollama model | `monk do openclaw/ollama/pull-model model=llama3.3` |
+| `list-models` | List Ollama models | `monk do openclaw/ollama/list-models` |
+
+## Recommended Ollama Models
+
+For CPU (no GPU):
+
+| Model | Size | Speed | Use Case |
+|-------|------|-------|----------|
+| qwen2.5:0.5b | 398MB | ⚡⚡⚡ | Testing, fast responses |
+| tinyllama | 637MB | ⚡⚡⚡ | Basic tasks |
+| llama3.2:1b | 1.3GB | ⚡⚡ | General purpose |
+| gemma2:2b | 1.6GB | ⚡⚡ | Quality responses |
+
+For GPU:
+
+| Model | Size | Speed | Use Case |
+|-------|------|-------|----------|
+| llama3.3 | 4.7GB | ⚡⚡⚡ | High quality |
+| qwen2.5-coder:32b | 19GB | ⚡⚡ | Code generation |
+| deepseek-r1:32b | 19GB | ⚡⚡ | Reasoning tasks |
+
+## Related templates
+
+- Combine with `ollama/ollama` for local LLM inference
+- Use with database templates for persistent storage
+- Integrate with monitoring templates for observability
+
+## Troubleshooting
+
+- Check gateway logs:
+
+```bash
+monk logs -f openclaw/gateway
+```
+
+- Check Ollama logs:
+
+```bash
+monk logs -f openclaw/ollama
+```
+
+- Verify gateway health:
+
+```bash
+curl http://localhost:18789/health
+```
+
+- Enter container shell:
+
+```bash
+monk shell openclaw/gateway
+```
+
+- For Ollama 404 errors, ensure a model is pulled:
+
+```bash
+monk do openclaw/ollama/pull-model model=qwen2.5:0.5b
+```
+
+## Links
+
+- [OpenClaw Documentation](https://docs.openclaw.ai)
+- [OpenClaw Docker Guide](https://docs.openclaw.ai/install/docker)
+- [OpenClaw GitHub](https://github.com/openclaw/openclaw)
+- [Docker Hub Image](https://hub.docker.com/r/alpine/openclaw)
+
