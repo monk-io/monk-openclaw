@@ -234,7 +234,7 @@ gateway-ollama:
       contents: |
         {
           "gateway": {
-            "mode": "local",
+            "mode": "remote",
             "auth": {
               "token": "{{ v "openclaw-gateway-token" }}"
             },
